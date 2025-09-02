@@ -1,8 +1,5 @@
 {
   "name": "vercel-receiver",
   "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "start": "vercel dev"
-  }
+  "private": true
 }
