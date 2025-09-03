@@ -20,8 +20,9 @@ export default function handler(req, res) {
     }
   }
 
-  res.setHeader('Content-Type', 'application/json');
-  res.status(200).send(JSON.stringify({ ok: true }));
+  // Simple response - users only see "ok"
+  res.setHeader('Content-Type', 'text/plain');
+  res.status(200).send('ok');
 }
 
 function safeParseJSON(input) {
