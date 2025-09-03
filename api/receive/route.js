@@ -21,33 +21,46 @@ async function handleRequest(request, method) {
 
   const dParam = (query.d || (body && body.d) || "").toString()
 
-  const logPayload = {
-    at: new Date().toISOString(),
-    method,
-    url: request.url,
-    ip: String(request.headers.get("x-forwarded-for") || ""),
-    userAgent: String(request.headers.get("user-agent") || ""),
-    query,
-    body,
-    hasD: Boolean(dParam),
+  console.log("=== INCOMING REQUEST ===")
+  console.log("Method:", method)
+  console.log("URL:", request.url)
+  console.log("Query params:", query)
+
+  if (body) {
+    console.log("Body:", body)
   }
 
   // Try to base64-decode the `d` parameter if present
   if (dParam) {
+    console.log("Raw d parameter:", dParam)
     try {
       // Some senders wrap it in parentheses: (base64...)
       const cleaned = dParam.replace(/[()]/g, "")
+      console.log("Cleaned d parameter:", cleaned)
+
       // First URL decode, then base64 decode
       const urlDecoded = decodeURIComponent(cleaned)
+      console.log("URL decoded:", urlDecoded)
+
       const decoded = Buffer.from(urlDecoded, "base64").toString("utf8")
-      logPayload.dDecoded = tryJsonParse(decoded) ?? decoded
+      console.log("Base64 decoded:", decoded)
+
+      const parsed = tryJsonParse(decoded)
+      if (parsed) {
+        console.log("=== DECODED JSON DATA ===")
+        console.log(JSON.stringify(parsed, null, 2))
+      } else {
+        console.log("=== DECODED TEXT DATA ===")
+        console.log(decoded)
+      }
     } catch (e) {
-      logPayload.dDecodeError = e?.message || String(e)
+      console.log("Decode error:", e?.message || String(e))
     }
+  } else {
+    console.log("No 'd' parameter found")
   }
 
-  // This shows up in Vercel -> Project -> Deployments -> Functions -> api/receive -> Logs
-  console.log("[vercel-receiver] Incoming request", logPayload)
+  console.log("=== END REQUEST ===")
 
   return Response.json({ ok: true })
 }
