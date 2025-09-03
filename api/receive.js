@@ -19,13 +19,17 @@ export default function handler(req, res) {
     hasD: Boolean(dParam),
   };
 
+  let decodedData = null;
+
   // Try to base64-decode the `d` parameter if present
   if (dParam) {
     try {
       // Some senders wrap it in parentheses: (base64...)
       const cleaned = dParam.replace(/[()]/g, '');
       const decoded = Buffer.from(cleaned, 'base64').toString('utf8');
-      logPayload.dDecoded = tryJsonParse(decoded) ?? decoded;
+      logPayload.dDecodedRaw = decoded;
+      decodedData = tryJsonParse(decoded) ?? decoded;
+      logPayload.dDecoded = decodedData;
     } catch (e) {
       logPayload.dDecodeError = e?.message || String(e);
     }
@@ -34,8 +38,22 @@ export default function handler(req, res) {
   // This shows up in Vercel -> Project -> Deployments -> Functions -> api/receive -> Logs
   console.log('[vercel-receiver] Incoming request', logPayload);
 
+  // Return clean response with just the decoded data
   res.setHeader('Content-Type', 'application/json');
-  res.status(200).send(JSON.stringify({ ok: true }));
+
+  if (decodedData) {
+    res.status(200).send(JSON.stringify({
+      success: true,
+      decoded: decodedData,
+      timestamp: logPayload.at
+    }, null, 2));
+  } else {
+    res.status(200).send(JSON.stringify({ 
+      success: false, 
+      message: 'No data to decode',
+      timestamp: logPayload.at
+    }));
+  }
 }
 
 function safeParseJSON(input) {
