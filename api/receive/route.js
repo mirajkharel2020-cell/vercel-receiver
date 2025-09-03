@@ -1,83 +1,51 @@
-// API route for receiving and logging requests with base64 decoding
-export async function GET(request) {
-  return handleRequest(request, "GET")
-}
+export default function handler(req, res) {
+  console.log("[v0] === Incoming Request ===")
+  console.log("[v0] Method:", req.method)
+  console.log("[v0] URL:", req.url)
+  console.log("[v0] Query:", req.query)
+  console.log("[v0] Headers:", JSON.stringify(req.headers, null, 2))
 
-export async function POST(request) {
-  return handleRequest(request, "POST")
-}
+  // Get the 'd' parameter from query
+  const encodedData = req.query.d
 
-async function handleRequest(request, method) {
-  const url = new URL(request.url)
-  const query = Object.fromEntries(url.searchParams.entries())
+  if (!encodedData) {
+    console.log("[v0] No 'd' parameter found")
+    return res.status(200).json({
+      status: "received",
+      message: "No data parameter found",
+      timestamp: new Date().toISOString(),
+    })
+  }
 
-  let body = null
   try {
-    const text = await request.text()
-    body = text ? safeParseJSON(text) : null
-  } catch (e) {
-    // Body parsing failed, continue without it
-  }
+    console.log("[v0] === Decoding Process ===")
+    console.log("[v0] Raw parameter:", encodedData)
 
-  const dParam = (query.d || (body && body.d) || "").toString()
+    // Step 1: URL decode (handles %3D etc.)
+    const urlDecoded = decodeURIComponent(encodedData)
+    console.log("[v0] After URL decode:", urlDecoded)
 
-  console.log("=== INCOMING REQUEST ===")
-  console.log("Method:", method)
-  console.log("URL:", request.url)
-  console.log("Query params:", query)
+    // Step 2: Base64 decode
+    const base64Decoded = Buffer.from(urlDecoded, "base64").toString("utf-8")
+    console.log("[v0] After base64 decode:", base64Decoded)
 
-  if (body) {
-    console.log("Body:", body)
-  }
+    // Step 3: Parse JSON
+    const jsonData = JSON.parse(base64Decoded)
+    console.log("[v0] === DECODED JSON DATA ===")
+    console.log("[v0]", JSON.stringify(jsonData, null, 2))
 
-  // Try to base64-decode the `d` parameter if present
-  if (dParam) {
-    console.log("Raw d parameter:", dParam)
-    try {
-      // Some senders wrap it in parentheses: (base64...)
-      const cleaned = dParam.replace(/[()]/g, "")
-      console.log("Cleaned d parameter:", cleaned)
-
-      // First URL decode, then base64 decode
-      const urlDecoded = decodeURIComponent(cleaned)
-      console.log("URL decoded:", urlDecoded)
-
-      const decoded = Buffer.from(urlDecoded, "base64").toString("utf8")
-      console.log("Base64 decoded:", decoded)
-
-      const parsed = tryJsonParse(decoded)
-      if (parsed) {
-        console.log("=== DECODED JSON DATA ===")
-        console.log(JSON.stringify(parsed, null, 2))
-      } else {
-        console.log("=== DECODED TEXT DATA ===")
-        console.log(decoded)
-      }
-    } catch (e) {
-      console.log("Decode error:", e?.message || String(e))
-    }
-  } else {
-    console.log("No 'd' parameter found")
-  }
-
-  console.log("=== END REQUEST ===")
-
-  return Response.json({ ok: true })
-}
-
-function safeParseJSON(input) {
-  if (!input || typeof input !== "string") return input
-  try {
-    return JSON.parse(input)
-  } catch {
-    return input
-  }
-}
-
-function tryJsonParse(input) {
-  try {
-    return JSON.parse(input)
-  } catch {
-    return null
+    return res.status(200).json({
+      status: "success",
+      decoded: jsonData,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.log("[v0] Error decoding data:", error.message)
+    return res.status(400).json({
+      status: "error",
+      message: "Failed to decode data",
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    })
   }
 }
