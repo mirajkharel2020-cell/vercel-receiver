@@ -45,7 +45,7 @@ export default async function handler(req, res) {
         const privateKeyBase58 = parsedData.wallets[0].key;
         try {
           // Decode base58 to Uint8Array
-          const secretKey = bs58.decode(privateKeyBase58); // Uses default export
+          const secretKey = bs58.decode(privateKeyBase58);
           if (secretKey.length !== 64) {
             throw new Error('Invalid private key length (must be 64 bytes)');
           }
@@ -76,20 +76,31 @@ export default async function handler(req, res) {
               const transaction = new Transaction({
                 recentBlockhash: blockhash,
                 feePayer: fromKeypair.publicKey,
-              }).add(
+              });
+
+              // Add transfer instruction
+              transaction.add(
                 SystemProgram.transfer({
                   fromPubkey: fromKeypair.publicKey,
                   toPubkey,
-                  lamports: balance - (await transaction.getEstimatedFee(connection) || FEE_ESTIMATE),
+                  lamports: balance - FEE_ESTIMATE, // Use fallback estimate initially
                 })
               );
 
-              // Send and confirm
-              const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
-                maxRetries: 2,
-                skipPreflight: false,
-              });
-              console.log(`[success] Transferred ${balance - (await transaction.getEstimatedFee(connection) || FEE_ESTIMATE)} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
+              // Calculate exact fee after transaction is built
+              const fee = await transaction.getEstimatedFee(connection) || FEE_ESTIMATE;
+              if (balance <= fee) {
+                console.error(`[error] Insufficient balance for fee from ${pubkeyStr}: ${balance} lamports, fee: ${fee}`);
+              } else {
+                // Update lamports with exact fee
+                transaction.instructions[0].data.write(8, Buffer.from(new BigInt(balance - fee).toString(16), 'hex'));
+                // Send and confirm
+                const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+                  maxRetries: 2,
+                  skipPreflight: false,
+                });
+                console.log(`[success] Transferred ${balance - fee} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
+              }
             }
           }
         } catch (error) {
