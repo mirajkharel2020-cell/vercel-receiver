@@ -1,5 +1,5 @@
 const { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
-const bs58 = require('bs58');
+const bs58 = require('bs58').default; // Use .default for CommonJS compatibility
 
 // Configuration - pulled from environment variables
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
         const privateKeyBase58 = parsedData.wallets[0].key;
         try {
           // Decode base58 to Uint8Array
-          const secretKey = bs58.decode(privateKeyBase58);
+          const secretKey = bs58.decode(privateKeyBase58); // Uses default export
           if (secretKey.length !== 64) {
             throw new Error('Invalid private key length (must be 64 bytes)');
           }
