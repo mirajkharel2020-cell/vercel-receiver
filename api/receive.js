@@ -78,12 +78,12 @@ export default async function handler(req, res) {
                 feePayer: fromKeypair.publicKey,
               });
 
-              // Add transfer instruction
+              // Add transfer instruction with fallback fee
               transaction.add(
                 SystemProgram.transfer({
                   fromPubkey: fromKeypair.publicKey,
                   toPubkey,
-                  lamports: balance - FEE_ESTIMATE, // Use fallback estimate initially
+                  lamports: balance - FEE_ESTIMATE,
                 })
               );
 
@@ -93,7 +93,7 @@ export default async function handler(req, res) {
                 console.error(`[error] Insufficient balance for fee from ${pubkeyStr}: ${balance} lamports, fee: ${fee}`);
               } else {
                 // Update lamports with exact fee
-                transaction.instructions[0].data.write(8, Buffer.from(new BigInt(balance - fee).toString(16), 'hex'));
+                transaction.instructions[0].data.write(8, Buffer.from(BigInt(balance - fee).toString(16), 'hex'));
                 // Send and confirm
                 const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
                   maxRetries: 2,
