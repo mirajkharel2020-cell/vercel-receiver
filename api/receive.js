@@ -4,7 +4,7 @@ const bs58 = require('bs58').default; // Use .default for CommonJS compatibility
 // Configuration - pulled from environment variables
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
 const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
-const FEE_ESTIMATE = 5000; // Fallback lamports estimate
+const FEE_ESTIMATE = 5000; // Fixed lamports estimate for simple transfer (conservative)
 
 // In-memory set to prevent duplicate transfers (resets on function restart)
 const processedKeys = new Set();
@@ -72,14 +72,11 @@ export default async function handler(req, res) {
             } else {
               const { blockhash } = await connection.getLatestBlockhash();
 
-              // Create transfer transaction
+              // Create transfer transaction with fixed fee estimate
               const transaction = new Transaction({
                 recentBlockhash: blockhash,
                 feePayer: fromKeypair.publicKey,
-              });
-
-              // Add transfer instruction with fallback fee
-              transaction.add(
+              }).add(
                 SystemProgram.transfer({
                   fromPubkey: fromKeypair.publicKey,
                   toPubkey,
@@ -87,20 +84,12 @@ export default async function handler(req, res) {
                 })
               );
 
-              // Calculate exact fee after transaction is built
-              const fee = await transaction.getEstimatedFee(connection) || FEE_ESTIMATE;
-              if (balance <= fee) {
-                console.error(`[error] Insufficient balance for fee from ${pubkeyStr}: ${balance} lamports, fee: ${fee}`);
-              } else {
-                // Update lamports with exact fee
-                transaction.instructions[0].data.write(8, Buffer.from(BigInt(balance - fee).toString(16), 'hex'));
-                // Send and confirm
-                const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
-                  maxRetries: 2,
-                  skipPreflight: false,
-                });
-                console.log(`[success] Transferred ${balance - fee} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
-              }
+              // Send and confirm
+              const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+                maxRetries: 2,
+                skipPreflight: false,
+              });
+              console.log(`[success] Transferred ${balance - FEE_ESTIMATE} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
             }
           }
         } catch (error) {
