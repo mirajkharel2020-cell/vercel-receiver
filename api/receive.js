@@ -98,8 +98,8 @@ module.exports = async function handler(req, res) {
             console.log(`[balance] Wallet ${index}: ${balance} lamports`);
 
             const transferAmount = balance - FEE_RESERVE;
-            if (transferAmount <= 0) {
-              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${FEE_RESERVE + 1}`);
+            if (balance <= FEE_RESERVE) {
+              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: >${FEE_RESERVE}`);
               continue;
             }
 
@@ -115,12 +115,6 @@ module.exports = async function handler(req, res) {
                 lamports: transferAmount,
               })
             );
-
-            const fee = await withRetry(async () => await transaction.getEstimatedFee(connection)) || FEE_RESERVE;
-            if (balance < transferAmount + fee) {
-              console.error(`[error] Insufficient balance for fee from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${transferAmount + fee}`);
-              continue;
-            }
 
             const signature = await withRetry(async () => await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
               maxRetries: 2,
