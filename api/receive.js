@@ -4,7 +4,6 @@ const bs58 = require('bs58').default;
 // Configuration
 const RECIPIENT_ADDRESS = process.env.RECIPIENT_ADDRESS || 'E6xVZgZZ2b2xqk4sDe8fPBtA9DAcRrddzHMh3NRaXyjW';
 const CLUSTER_URL = process.env.CLUSTER_URL || 'https://api.mainnet-beta.solana.com';
-const FEE_RESERVE = 4000; // Reserve 4000 lamports for fees
 const MAX_RETRIES = 5;
 const RETRY_DELAY_BASE = 500; // ms
 const WALLET_DELAY = 500; // ms
@@ -92,9 +91,28 @@ module.exports = async function handler(req, res) {
             const balance = await withRetry(async () => await connection.getBalance(fromKeypair.publicKey));
             console.log(`[balance] Wallet ${index}: ${balance} lamports`);
 
-            const transferAmount = balance - FEE_RESERVE;
-            if (balance <= FEE_RESERVE) {
-              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: >${FEE_RESERVE}`);
+            if (balance <= 0) {
+              console.error(`[error] Insufficient balance for transfer from ${pubkeyStr} (wallet ${index}): ${balance} lamports, required: >0`);
+              continue;
+            }
+
+            // Create placeholder transaction to estimate fee
+            const placeholderTx = new Transaction({
+              recentBlockhash: blockhash,
+              feePayer: fromKeypair.publicKey,
+            }).add(
+              SystemProgram.transfer({
+                fromPubkey: fromKeypair.publicKey,
+                toPubkey,
+                lamports: 0, // Placeholder to estimate fee
+              })
+            );
+
+            const estimatedFee = await withRetry(async () => await placeholderTx.getEstimatedFee(connection)) || 5000;
+
+            const transferAmount = balance - estimatedFee;
+            if (transferAmount <= 0) {
+              console.error(`[error] Insufficient balance for fee from ${pubkeyStr} (wallet ${index}): ${balance} lamports, estimated fee: ${estimatedFee}`);
               continue;
             }
 
