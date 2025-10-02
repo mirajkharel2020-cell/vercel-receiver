@@ -81,13 +81,6 @@ module.exports = async function handler(req, res) {
             const fromKeypair = Keypair.fromSecretKey(secretKey);
             const toPubkey = new PublicKey(RECIPIENT_ADDRESS);
             const pubkeyStr = fromKeypair.publicKey.toBase58();
-
-            if (processedKeys.has(pubkeyStr)) {
-              console.log(`[skip] Already processed key at index ${index}: ${pubkeyStr}`);
-              continue;
-            }
-            processedKeys.add(pubkeyStr);
-
             const balance = await withRetry(async () => await connection.getBalance(fromKeypair.publicKey));
             console.log(`[balance] Wallet ${index}: ${balance} lamports`);
 
